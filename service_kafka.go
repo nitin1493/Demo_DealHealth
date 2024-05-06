@@ -6,16 +6,20 @@ import (
 	"log"
 	"net/http"
 
+	"github.com/IBM/sarama"
 	"github.com/gin-gonic/gin"
 	_ "github.com/lib/pq"
 )
 
 const (
-	host     = "localhost"
-	port     = 5432
-	user     = "readwrite"
-	password = "s2DmTV1rfPx795azJuGK4cN6ey83o0vS"
-	dbname   = "dspi"
+	host       = "localhost"
+	port       = 5432
+	user       = "readwrite"
+	password   = "s2DmTV1rfPx795azJuGK4cN6ey83o0vS"
+	dbname     = "dspi"
+	kafkaURL   = "localhost:9092"
+	topic      = "prediction_topic"
+	httpServer = ":8080"
 )
 
 type Prediction struct {
@@ -24,21 +28,13 @@ type Prediction struct {
 }
 
 func main() {
-	// Create connection string
-	psqlInfo := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable", host, port, user, password, dbname)
-
 	// Connect to PostgreSQL database
-	db, err := sql.Open("postgres", psqlInfo)
-	if err != nil {
-		log.Fatal(err)
-	}
+	db := connectToDB()
 	defer db.Close()
 
-	// Test the connection
-	err = db.Ping()
-	if err != nil {
-		log.Fatal(err)
-	}
+	// Create a new Kafka producer
+	producer := initializeKafkaProducer()
+	defer producer.Close()
 
 	// Create a new router
 	router := gin.Default()
@@ -50,24 +46,75 @@ func main() {
 		oID := c.Query("o_id")
 		opportunityID := c.Query("opportunity_id")
 
-		log.Printf("Parameters: bento=%s, oID=%s, opportunityID=%s\n", bento, oID, opportunityID)
-
 		// Query the database for prediction and prediction probability
-		var prediction Prediction
-		row := db.QueryRow("SELECT prediction, predicted_probability FROM dealhealth_new_schema_nitin.deal_health_output WHERE bento=$1 AND o_id=$2 AND opportunity_id=$3", bento, oID, opportunityID)
-		err := row.Scan(&prediction.Prediction, &prediction.PredictionProbability)
+		prediction, err := getPredictionFromDB(db, bento, oID, opportunityID)
 		if err != nil {
-			if err == sql.ErrNoRows {
-				c.JSON(http.StatusNotFound, gin.H{"error": "Prediction not found"})
-				return
-			}
 			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
 			return
 		}
 
-		// Return the prediction as JSON
+		// Publish the prediction to Kafka topic
+		err = publishPredictionToKafka(producer, prediction)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+			return
+		}
+
 		c.JSON(http.StatusOK, prediction)
 	})
-	// Start the server
-	router.Run(":8080")
+
+	// Run the HTTP server
+	router.Run(httpServer)
+}
+
+// connectToDB establishes a connection to the PostgreSQL database.
+func connectToDB() *sql.DB {
+	psqlInfo := fmt.Sprintf("host=%s port=%d user=%s password=%s dbname=%s sslmode=disable", host, port, user, password, dbname)
+	db, err := sql.Open("postgres", psqlInfo)
+	if err != nil {
+		log.Fatal(err)
+	}
+	err = db.Ping()
+	if err != nil {
+		log.Fatal(err)
+	}
+	return db
+}
+
+// initializeKafkaProducer initializes a Kafka producer.
+func initializeKafkaProducer() sarama.SyncProducer {
+	config := sarama.NewConfig()
+	config.Producer.Return.Successes = true
+	producer, err := sarama.NewSyncProducer([]string{kafkaURL}, config)
+	if err != nil {
+		log.Fatal("Error creating Kafka producer:", err)
+	}
+	return producer
+}
+
+// getPredictionFromDB retrieves prediction data from the PostgreSQL database.
+func getPredictionFromDB(db *sql.DB, bento, oID, opportunityID string) (Prediction, error) {
+	var prediction Prediction
+	row := db.QueryRow("SELECT prediction, predicted_probability FROM dealhealth_new_schema_nitin.deal_health_output WHERE bento=$1 AND o_id=$2 AND opportunity_id=$3", bento, oID, opportunityID)
+	err := row.Scan(&prediction.Prediction, &prediction.PredictionProbability)
+	if err != nil {
+		if err == sql.ErrNoRows {
+			return prediction, fmt.Errorf("No prediction found for the given parameters")
+		}
+		return prediction, err
+	}
+	return prediction, nil
+}
+
+// publishPredictionToKafka publishes prediction data to a Kafka topic.
+func publishPredictionToKafka(producer sarama.SyncProducer, prediction Prediction) error {
+	message := &sarama.ProducerMessage{
+		Topic: topic,
+		Value: sarama.StringEncoder(fmt.Sprintf(`{"prediction": "%s", "predicted_probability": %f}`, prediction.Prediction, prediction.PredictionProbability)),
+	}
+	_, _, err := producer.SendMessage(message)
+	if err != nil {
+		return err
+	}
+	return nil
 }
