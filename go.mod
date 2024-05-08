@@ -3,6 +3,7 @@ module grpc_dhs
 go 1.22.0
 
 require (
+	github.com/lib/pq v1.10.9 // indirect
 	golang.org/x/net v0.21.0 // indirect
 	golang.org/x/sys v0.17.0 // indirect
 	golang.org/x/text v0.14.0 // indirect

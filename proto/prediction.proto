@@ -9,7 +9,7 @@ service PredictionService {
 message PredictionRequest {
     string bento = 1;
     string o_id = 2;
-    int32 opportunity_id = 3;
+    string opportunity_id = 3;
 }
 
 message PredictionResponse {

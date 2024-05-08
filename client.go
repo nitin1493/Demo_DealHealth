@@ -27,7 +27,7 @@ func main() {
 	c := pb.NewPredictionServiceClient(conn)
 
 	// Contact the server and print out its response.
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second) // Increased deadline to 10 seconds
 	defer cancel()
 	log.Println("Client connected successfully")
 	log.Println("Client sending prediction request")

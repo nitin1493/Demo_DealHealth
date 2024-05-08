@@ -7,6 +7,8 @@ import (
 	"log"
 	"net"
 
+	_ "github.com/lib/pq" // Import PostgreSQL driver package
+
 	pb "grpc_dhs/proto"
 
 	"google.golang.org/grpc"
@@ -31,6 +33,7 @@ type Prediction struct {
 }
 
 func (s *server) Predict(ctx context.Context, req *pb.PredictionRequest) (*pb.PredictionResponse, error) {
+	log.Println("Received prediction request.") // Add this line
 	bento := req.Bento
 	oID := req.OId
 	opportunityID := req.OpportunityId
